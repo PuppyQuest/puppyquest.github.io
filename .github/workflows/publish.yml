@@ -1,0 +1,81 @@
+# Publishes Seb's Puppy Quest to https://puppyquest.github.io/
+# Runs whenever something is uploaded to the main branch (or from the Actions tab with "Run workflow").
+# It unpacks the zips into the website:
+#   home.zip -> the front page
+#   pq2.zip  -> /pq2/
+#   pq3.zip  -> /pq3/
+#   pqN.zip  -> /pqN/ (for later games)
+# If a zip was uploaded with a different name, such as "pq3 (1).zip", the newest upload for each game is used.
+
+name: Publish Puppy Quest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Get the zips
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Unpack the site
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          declare -A pick when
+          for z in *.zip; do
+            key="$(basename "$z" .zip | tr '[:upper:]' '[:lower:]' | grep -oE '^(home|pq[0-9]+)' || true)"
+            if [ -z "$key" ]; then echo "::warning::Skipping $z (not home or pqN)"; continue; fi
+            t="$(git log -1 --format=%ct -- "$z")"
+            if [ -z "${when[$key]:-}" ] || [ "$t" -ge "${when[$key]}" ]; then pick[$key]="$z"; when[$key]="$t"; fi
+          done
+          if [ -z "${pick[home]:-}" ]; then echo "::error::home.zip is missing"; exit 1; fi
+          mkdir -p _site
+          games="$(printf '%s\n' "${!pick[@]}" | grep -v '^home$' | sort || true)"
+          for key in home $games; do
+            z="${pick[$key]}"
+            if [ "$key" = home ]; then dest=_site; else dest="_site/$key"; fi
+            tmp="$(mktemp -d)"
+            unzip -q -o "$z" -d "$tmp"
+            rm -rf "$tmp/__MACOSX"
+            find "$tmp" -name '.DS_Store' -delete
+            src="$tmp"
+            if [ ! -f "$src/index.html" ]; then
+              inner=("$src"/*/)
+              if [ "${#inner[@]}" -eq 1 ] && [ -f "${inner[0]}index.html" ]; then src="${inner[0]}"; fi
+            fi
+            if [ ! -f "$src/index.html" ]; then echo "::error::$z has no index.html inside"; exit 1; fi
+            mkdir -p "$dest"
+            cp -R "$src"/. "$dest"/
+            echo "Unpacked $z into $dest ($(find "$src" -type f | wc -l) files)"
+          done
+
+      - name: Set up Pages
+        uses: actions/configure-pages@v6
+
+      - name: Package the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v5
