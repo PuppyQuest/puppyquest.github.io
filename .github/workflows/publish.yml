@@ -5,6 +5,7 @@
 #   pq2.zip  -> /pq2/
 #   pq3.zip  -> /pq3/
 #   pqN.zip  -> /pqN/ (for later games)
+#   lab.zip and lab-<id>.zip -> /lab/ (the PIN-locked test page and its scrambled test games)
 # If a zip was uploaded with a different name, such as "pq3 (1).zip", the newest upload for each game is used.
 
 name: Publish Puppy Quest
@@ -42,8 +43,8 @@ jobs:
           shopt -s nullglob
           declare -A pick when
           for z in *.zip; do
-            key="$(basename "$z" .zip | tr '[:upper:]' '[:lower:]' | grep -oE '^(home|pq[0-9]+)' || true)"
-            if [ -z "$key" ]; then echo "::warning::Skipping $z (not home or pqN)"; continue; fi
+            key="$(basename "$z" .zip | tr '[:upper:]' '[:lower:]' | grep -oE '^(home|lab(-[a-z0-9]+)?|pq[0-9]+)' || true)"
+            if [ -z "$key" ]; then echo "::warning::Skipping $z (not home, lab or pqN)"; continue; fi
             t="$(git log -1 --format=%ct -- "$z")"
             if [ -z "${when[$key]:-}" ] || [ "$t" -ge "${when[$key]}" ]; then pick[$key]="$z"; when[$key]="$t"; fi
           done
@@ -52,17 +53,17 @@ jobs:
           games="$(printf '%s\n' "${!pick[@]}" | grep -v '^home$' | sort || true)"
           for key in home $games; do
             z="${pick[$key]}"
-            if [ "$key" = home ]; then dest=_site; else dest="_site/$key"; fi
+            if [ "$key" = home ]; then dest=_site; elif [[ "$key" == lab* ]]; then dest=_site/lab; else dest="_site/$key"; fi
             tmp="$(mktemp -d)"
             unzip -q -o "$z" -d "$tmp"
             rm -rf "$tmp/__MACOSX"
             find "$tmp" -name '.DS_Store' -delete
             src="$tmp"
-            if [ ! -f "$src/index.html" ]; then
+            if [ ! -f "$src/index.html" ] && [ -z "$(find "$src" -maxdepth 1 -type f -name '*.bin')" ]; then
               inner=("$src"/*/)
               if [ "${#inner[@]}" -eq 1 ] && [ -f "${inner[0]}index.html" ]; then src="${inner[0]}"; fi
             fi
-            if [ ! -f "$src/index.html" ]; then echo "::error::$z has no index.html inside"; exit 1; fi
+            if [[ "$key" != lab-* ]] && [ ! -f "$src/index.html" ]; then echo "::error::$z has no index.html inside"; exit 1; fi
             mkdir -p "$dest"
             cp -R "$src"/. "$dest"/
             echo "Unpacked $z into $dest ($(find "$src" -type f | wc -l) files)"
